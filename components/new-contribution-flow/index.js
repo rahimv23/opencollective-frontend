@@ -12,6 +12,7 @@ import { GQLV2_PAYMENT_METHOD_TYPES } from '../../lib/constants/payment-methods'
 import { TierTypes } from '../../lib/constants/tiers-types';
 import { formatErrorMessage, getErrorFromGraphqlException } from '../../lib/errors';
 import { API_V2_CONTEXT, gqlV2 } from '../../lib/graphql/helpers';
+import { addCreateCollectiveMutation } from '../../lib/graphql/mutations';
 import { getStripe, stripeTokenToPaymentMethod } from '../../lib/stripe';
 import { getDefaultTierAmount, getTierMinAmount, isFixedContribution } from '../../lib/tier-utils';
 import { getWebsiteUrl } from '../../lib/utils';
@@ -88,6 +89,7 @@ class ContributionFlow extends React.Component {
     refetchLoggedInUser: PropTypes.func,
     /** @ignore from withUser */
     LoggedInUser: PropTypes.object,
+    createCollective: PropTypes.func.isRequired, // from mutation
   };
 
   constructor(props) {
@@ -201,6 +203,8 @@ class ContributionFlow extends React.Component {
       };
     } else if (stepPayment.paymentMethod.type === GQLV2_PAYMENT_METHOD_TYPES.PAYPAL) {
       return pick(stepPayment.paymentMethod, ['type', 'paypalInfo.token', 'paypalInfo.data']);
+    } else if (stepPayment.paymentMethod.type === GQLV2_PAYMENT_METHOD_TYPES.BANK_TRANSFER) {
+      return pick(stepPayment.paymentMethod, ['type']);
     }
   };
 
@@ -216,6 +220,32 @@ class ContributionFlow extends React.Component {
     currentPath = `${currentPath.replace('profile', 'payment')}&emailRedirect=true`;
     return encodeURIComponent(currentPath);
   }
+
+  /** Validate step profile, create new incognito/org if necessary */
+  /** TODO: create profile for new org */
+  validateStepProfile = async () => {
+    if (!this.state.stepProfile) {
+      return false;
+    }
+
+    // Check if we're creating a new profile
+    if (this.state.stepProfile.id === 'incognito') {
+      this.setState({ submitting: true });
+
+      try {
+        const { data: result } = await this.props.createCollective(this.state.stepProfile);
+        const createdProfile = result.createCollective;
+        await this.props.refetchLoggedInUser();
+        this.setState({ stepProfile: createdProfile, submitting: false });
+      } catch (error) {
+        this.setState({ error: error.message, submitting: false });
+        window.scrollTo(0, 0);
+        return false;
+      }
+    }
+
+    return true;
+  };
 
   createProfileForRecurringContributions = async data => {
     if (this.state.isSubmitting) {
@@ -335,6 +365,7 @@ class ContributionFlow extends React.Component {
         name: 'profile',
         label: intl.formatMessage(stepsLabels.contributeAs),
         isCompleted: Boolean(this.state.stepProfile),
+        validate: this.validateStepProfile,
       },
     ];
 
@@ -501,15 +532,60 @@ class ContributionFlow extends React.Component {
   }
 }
 
-const orderResponseFragment = gqlV2`
+export const orderSuccessFragment = gqlV2/* GraphQL */ `
+  fragment OrderSuccessFragment on Order {
+    id
+    status
+    amount {
+      value
+      currency
+    }
+    platformContributionAmount {
+      value
+    }
+    tier {
+      name
+    }
+    fromAccount {
+      id
+      name
+      memberOf {
+        totalCount
+        nodes {
+          id
+          publicMessage
+        }
+      }
+    }
+    toAccount {
+      id
+      name
+      slug
+      ... on AccountWithContributions {
+        contributors {
+          totalCount
+        }
+      }
+      ... on AccountWithHost {
+        host {
+          id
+          settings
+          payoutMethods {
+            id
+            name
+            data
+            type
+          }
+        }
+      }
+    }
+  }
+`;
+
+const orderResponseFragment = gqlV2/* GraphQL */ `
   fragment OrderResponseFragment on OrderWithPayment {
     order {
-      id
-      status
-      frequency
-      amount {
-        valueInCents
-      }
+      ...OrderSuccessFragment
     }
     stripeError {
       message
@@ -517,6 +593,7 @@ const orderResponseFragment = gqlV2`
       response
     }
   }
+  ${orderSuccessFragment}
 `;
 
 // TODO: Use a fragment to retrieve the fields from success page in there
@@ -551,5 +628,7 @@ const addConfirmOrderMutation = graphql(
 );
 
 export default injectIntl(
-  withUser(addSignupMutation(addConfirmOrderMutation(addCreateOrderMutation(ContributionFlow)))),
+  withUser(
+    addSignupMutation(addConfirmOrderMutation(addCreateOrderMutation(addCreateCollectiveMutation(ContributionFlow)))),
+  ),
 );

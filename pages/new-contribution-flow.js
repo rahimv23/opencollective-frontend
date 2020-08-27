@@ -276,6 +276,12 @@ const accountFieldsFragment = gqlV2/* GraphQL */ `
           country
         }
         supportedPaymentMethods
+        payoutMethods {
+          id
+          name
+          data
+          type
+        }
       }
     }
     ... on Event {

@@ -44,7 +44,10 @@ export const NEW_CREDIT_CARD_KEY = 'newCreditCard';
 
 export const generatePaymentMethodOptions = (paymentMethods, stepProfile, stepDetails, stepSummary, collective) => {
   const supportedPaymentMethods = get(collective, 'host.supportedPaymentMethods', []);
+  console.log(supportedPaymentMethods);
   const hostHasManual = supportedPaymentMethods.includes(GQLV2_PAYMENT_METHOD_TYPES.BANK_TRANSFER);
+  console.log(hostHasManual);
+  console.log(collective.host);
   const hostHasPaypal = supportedPaymentMethods.includes(GQLV2_PAYMENT_METHOD_TYPES.PAYPAL);
   const hostHasStripe = supportedPaymentMethods.includes(GQLV2_PAYMENT_METHOD_TYPES.CREDIT_CARD);
   const totalAmount = getTotalAmount(stepDetails, stepSummary);
@@ -126,7 +129,12 @@ export const generatePaymentMethodOptions = (paymentMethods, stepProfile, stepDe
         title: get(collective, 'host.settings.paymentMethods.manual.title', null) || 'Bank transfer',
         paymentMethod: { type: GQLV2_PAYMENT_METHOD_TYPES.BANK_TRANSFER },
         icon: getPaymentMethodIcon({ type: 'manual' }, collective),
-        instructions: get(collective, 'host.settings.paymentMethods.manual.instructions', null),
+        instructions: (
+          <FormattedMessage
+            id="NewContributionFlow.bankInstructions"
+            defaultMessage="Instructions will be given on the next page to make a transfer."
+          />
+        ),
       });
     }
   }
