@@ -64,6 +64,13 @@ export const transactionsQueryCollectionFragment = gqlV2/* GraphQL */ `
           platformFeePercent
         }
       }
+      virtualCardEmitterAccount {
+        id
+        name
+        slug
+        type
+        imageUrl
+      }
       permissions {
         canRefund
         canDownloadInvoice
