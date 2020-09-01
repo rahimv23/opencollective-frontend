@@ -1,7 +1,7 @@
 import React from 'react';
 import PropTypes from 'prop-types';
 import { graphql } from '@apollo/client/react/hoc';
-import { get, pick } from 'lodash';
+import { get, isNil, pick } from 'lodash';
 import memoizeOne from 'memoize-one';
 import { defineMessages, injectIntl } from 'react-intl';
 import styled from 'styled-components';
@@ -10,23 +10,26 @@ import { CollectiveType } from '../../lib/constants/collectives';
 import { getGQLV2FrequencyFromInterval } from '../../lib/constants/intervals';
 import { GQLV2_PAYMENT_METHOD_TYPES } from '../../lib/constants/payment-methods';
 import { TierTypes } from '../../lib/constants/tiers-types';
+import { getEnvVar } from '../../lib/env-utils';
 import { formatErrorMessage, getErrorFromGraphqlException } from '../../lib/errors';
 import { API_V2_CONTEXT, gqlV2 } from '../../lib/graphql/helpers';
 import { getStripe, stripeTokenToPaymentMethod } from '../../lib/stripe';
 import { getDefaultTierAmount, getTierMinAmount, isFixedContribution } from '../../lib/tier-utils';
+import { objectToQueryString } from '../../lib/url_helpers';
 import { getWebsiteUrl } from '../../lib/utils';
 import { Router } from '../../server/pages';
 
 import Container from '../../components/Container';
 import NewContributeFAQ from '../../components/faqs/NewContributeFAQ';
 import { Box, Grid } from '../../components/Grid';
-import { addSignupMutation } from '../../components/SignInOrJoinFree';
+import SignInOrJoinFree, { addSignupMutation } from '../../components/SignInOrJoinFree';
 
 import Loading from '../Loading';
 import MessageBox from '../MessageBox';
 import Steps from '../Steps';
 import { withUser } from '../UserProvider';
 
+import { STEPS } from './constants';
 import ContributionFlowButtons from './ContributionFlowButtons';
 import ContributionFlowHeader from './ContributionFlowHeader';
 import ContributionFlowMainContainer from './ContributionFlowMainContainer';
@@ -81,6 +84,7 @@ class ContributionFlow extends React.Component {
     confirmOrder: PropTypes.func.isRequired,
     fixedInterval: PropTypes.string,
     fixedAmount: PropTypes.number,
+    platformContribution: PropTypes.number,
     skipStepDetails: PropTypes.bool,
     step: PropTypes.string,
     verb: PropTypes.oneOf(['new-donate', 'new-contribute']),
@@ -105,6 +109,7 @@ class ContributionFlow extends React.Component {
         quantity: 1,
         interval: props.fixedInterval || props.tier?.interval,
         amount: props.fixedAmount || getDefaultTierAmount(props.tier),
+        platformContribution: props.platformContribution,
       },
     };
   }
@@ -114,6 +119,8 @@ class ContributionFlow extends React.Component {
     // TODO We're still relying on profiles from V1 (LoggedInUser)
     const fromAccount = typeof stepProfile.id === 'string' ? { id: stepProfile.id } : { legacyId: stepProfile.id };
     this.setState({ error: null });
+
+    const getAmount = (valueInCents, defaultValue) => (valueInCents ? { valueInCents } : defaultValue);
 
     try {
       const response = await this.props.createOrder({
@@ -126,11 +133,11 @@ class ContributionFlow extends React.Component {
             toAccount: pick(this.props.collective, ['id']),
             customData: stepDetails.customData,
             paymentMethod: await this.getPaymentMethod(),
-            platformContributionAmount: stepDetails.feesOnTop && { valueInCents: stepDetails.feesOnTop },
+            platformContributionAmount: getAmount(stepDetails.platformContribution, undefined),
             taxes: stepSummary && [
               {
                 type: 'VAT',
-                amount: stepSummary.amount || 0,
+                amount: getAmount(stepSummary.amount, 0),
                 country: stepSummary.countryISO,
                 idNumber: stepSummary.number,
               },
@@ -254,7 +261,6 @@ class ContributionFlow extends React.Component {
       verb: this.props.verb || 'new-donate',
       collectiveSlug: collective.slug,
       step: stepName === 'details' ? undefined : stepName,
-      totalAmount: this.props.fixedAmount ? this.props.fixedAmount.toString() : undefined,
       interval: this.props.fixedInterval || undefined,
       ...pick(this.props, ['interval', 'description', 'redirect']),
       ...routeParams,
@@ -394,6 +400,29 @@ class ContributionFlow extends React.Component {
     }
   }
 
+  getRedirectUrlForSignIn = () => {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+
+    const { stepDetails } = this.state;
+    const stepDetailsParams = objectToQueryString({
+      amount: stepDetails.amount / 100,
+      interval: stepDetails.interval || undefined,
+      quantity: stepDetails.quantity !== 1 ? stepDetails.quantity : undefined,
+      platformContribution: !isNil(stepDetails.platformContribution)
+        ? stepDetails.platformContribution / 100
+        : undefined,
+    });
+
+    const path = window.location.pathname;
+    if (window.location.search) {
+      return `${path}${window.location.search}&${stepDetailsParams.slice(1)}`;
+    } else {
+      return `${path}${stepDetailsParams}`;
+    }
+  };
+
   render() {
     const { collective, tier, LoggedInUser, skipStepDetails } = this.props;
     const { error, isSubmitted, isSubmitting } = this.state;
@@ -441,58 +470,65 @@ class ContributionFlow extends React.Component {
                   stepProfile={this.state.stepProfile}
                   stepDetails={this.state.stepDetails}
                   stepPayment={this.state.stepPayment}
+                  stepSummary={this.state.stepSummary}
                   isSubmitted={this.state.isSubmitted}
                   loading={isValidating || isSubmitted || isSubmitting}
                   currency={collective.currency}
                   isFreeTier={this.getTierMinAmount(tier) === 0}
                 />
               </StepsProgressBox>
-              {/* main container */}
-              <Grid
-                px={[2, 3]}
-                gridTemplateColumns={[
-                  'minmax(200px, 600px)',
-                  null,
-                  '0fr minmax(300px, 600px) 1fr',
-                  '1fr minmax(300px, 600px) 1fr',
-                ]}
-              >
-                <Box />
-                <Box as="form" onSubmit={e => e.preventDefault()} maxWidth="100%">
-                  {error && (
-                    <MessageBox type="error" withIcon mb={3}>
-                      {formatErrorMessage(this.props.intl, error)}
-                    </MessageBox>
-                  )}
-                  <ContributionFlowMainContainer
-                    collective={collective}
-                    tier={tier}
-                    mainState={this.state}
-                    onChange={data => this.setState(data)}
-                    step={currentStep}
-                    showFeesOnTop={this.canHaveFeesOnTop()}
-                    onNewCardFormReady={({ stripe }) => this.setState({ stripe })}
-                  />
-                  <Box mt={[4, 5]}>
-                    <ContributionFlowButtons
-                      goNext={goNext}
-                      goBack={goBack}
+              {/* main container */}{' '}
+              {currentStep.name === STEPS.PROFILE && !LoggedInUser && !getEnvVar('ENABLE_GUEST_CONTRIBUTIONS') ? (
+                <SignInOrJoinFree defaultForm="create-account" redirect={this.getRedirectUrlForSignIn()} />
+              ) : (
+                <Grid
+                  px={[2, 3]}
+                  gridTemplateColumns={[
+                    'minmax(200px, 600px)',
+                    null,
+                    '0fr minmax(300px, 600px) 1fr',
+                    '1fr minmax(300px, 600px) 1fr',
+                  ]}
+                >
+                  <Box />
+                  <Box as="form" onSubmit={e => e.preventDefault()} maxWidth="100%">
+                    {error && (
+                      <MessageBox type="error" withIcon mb={3}>
+                        {formatErrorMessage(this.props.intl, error)}
+                      </MessageBox>
+                    )}
+
+                    <ContributionFlowMainContainer
+                      collective={collective}
+                      tier={tier}
+                      mainState={this.state}
+                      onChange={data => this.setState(data)}
                       step={currentStep}
-                      prevStep={prevStep}
-                      nextStep={nextStep}
-                      isRecurringContributionLoggedOut={!LoggedInUser && this.state.stepDetails?.interval}
-                      isValidating={isValidating || isSubmitted || isSubmitting}
-                      paypalButtonProps={this.getPaypalButtonProps()}
+                      showFeesOnTop={this.canHaveFeesOnTop()}
+                      onNewCardFormReady={({ stripe }) => this.setState({ stripe })}
                     />
+
+                    <Box mt={[4, 5]}>
+                      <ContributionFlowButtons
+                        goNext={goNext}
+                        goBack={goBack}
+                        step={currentStep}
+                        prevStep={prevStep}
+                        nextStep={nextStep}
+                        isRecurringContributionLoggedOut={!LoggedInUser && this.state.stepDetails?.interval}
+                        isValidating={isValidating || isSubmitted || isSubmitting}
+                        paypalButtonProps={this.getPaypalButtonProps()}
+                      />
+                    </Box>
                   </Box>
-                </Box>
-                <Box minWidth={[null, '300px']} mt={[4, null, 0]} ml={[0, 3, 4, 5]}>
-                  <Box maxWidth={['100%', null, 300]} px={[1, null, 0]}>
-                    <SafeTransactionMessage />
-                    <NewContributeFAQ mt={4} titleProps={{ mb: 2 }} />
+                  <Box minWidth={[null, '300px']} mt={[4, null, 0]} ml={[0, 3, 4, 5]}>
+                    <Box maxWidth={['100%', null, 300]} px={[1, null, 0]}>
+                      <SafeTransactionMessage />
+                      <NewContributeFAQ mt={4} titleProps={{ mb: 2 }} />
+                    </Box>
                   </Box>
-                </Box>
-              </Grid>
+                </Grid>
+              )}
             </Container>
           )
         }
