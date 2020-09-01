@@ -5,9 +5,11 @@
 
 <p align="center">
   <a href="https://github.com/opencollective/opencollective-frontend">
-    <img width="525"src="http://res.cloudinary.com/opencollective/image/upload/c_scale,w_1050/v1536861775/opencollective-babel-2018-09-13_ue8yhg.png" alt="Babel - Open Collective">
+    <img src="https://user-images.githubusercontent.com/1556356/91911119-b8f9cf80-ecb0-11ea-915d-e1ef2b51f085.png" alt="Babel - Open Collective">
   </a>
 </p>
+
+
 
 ## Foreword
 
